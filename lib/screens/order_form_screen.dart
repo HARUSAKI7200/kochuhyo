@@ -124,7 +124,8 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
   final TextEditingController _quantityController = TextEditingController();
 
   String? _selectedMaterial;
-  final List<String> _materialOptions = const ['LVL', '合板', 'その他'];
+  // 1. 材質選択を「LVL」と「熱処理」にしてください。
+  final List<String> _materialOptions = const ['LVL', '熱処理'];
 
   final TextEditingController _desiccantPeriodController = TextEditingController();
   final TextEditingController _desiccantResultDisplayController = TextEditingController();
@@ -896,7 +897,7 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
               '材質', 
               'material',
               _selectedMaterial, 
-              _materialOptions, 
+              _materialOptions, // 修正された選択肢が使われます
               (value) => setState(() => _selectedMaterial = value),
               '材質を選択'
             ),
@@ -1014,11 +1015,11 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
 
             _buildVerticalInputGroup(
               '負荷床材',
-               _buildTripleInputRowWithUnit(
+               _buildTripleInputRowWithUnit( // 2. 負荷床材の数量で自動計算の結果を手動で変更できるように、修正
                 'loadBearingMaterialWidth', _loadBearingMaterialWidthController, '幅',
                 'loadBearingMaterialThickness', _loadBearingMaterialThicknessController, '厚さ',
                 'loadBearingMaterialQuantity', _loadBearingMaterialQuantityController, '本',
-                isQuantityReadOnly: isUniformLoad || isTwoPointLoad,
+                // isQuantityReadOnly パラメータを削除し、常に編集可能にする
               ),
             ),
             _buildVerticalInputGroup(
@@ -1517,7 +1518,7 @@ class _OrderFormScreenState extends State<OrderFormScreen> {
     String key1, TextEditingController ctrl1, String hint1,
     String key2, TextEditingController ctrl2, String hint2,
     String key3, TextEditingController ctrl3, String hint3,
-    {bool isQuantityReadOnly = false}
+    {bool isQuantityReadOnly = false} // この引数は残しても良いですが、呼び出し側で値を渡さないようにします
   ) {
     return Row(
       children: [
