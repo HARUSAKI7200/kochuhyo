@@ -1,9 +1,13 @@
-import 'package:flutter/material.dart';
-import 'package:kouchuhyo_app/widgets/drawing_canvas.dart';
+// lib/screens/drawing_screen.dart
+
 import 'dart:typed_data';
+import 'dart:ui' as ui; // ★ StrokeCapのためにインポートを追加
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:kouchuhyo_app/widgets/drawing_canvas.dart';
 
 class DrawingScreen extends StatefulWidget {
-  final List<PathSegment> initialPaths;
+  final List<DrawingElement> initialPaths;
   final String backgroundImagePath;
   final String title;
 
@@ -19,28 +23,241 @@ class DrawingScreen extends StatefulWidget {
 }
 
 class _DrawingScreenState extends State<DrawingScreen> {
-  DrawingMode _drawingMode = DrawingMode.free;
-  final GlobalKey<DrawingCanvasState> _canvasKey = GlobalKey<DrawingCanvasState>();
+  late final ValueNotifier<List<DrawingElement>> _elementsNotifier;
+  late final ValueNotifier<DrawingElement?> _previewElementNotifier;
+
+  DrawingTool _selectedTool = DrawingTool.pen;
+  final GlobalKey _canvasKey = GlobalKey();
+
+  static const double _rectangleWidth = 30.0;
+  static const double _rectangleHeight = 30.0;
+
+  Rect? _imageBounds;
+  late Image _backgroundImage;
+  double _imageAspectRatio = 4 / 3;
+
+  @override
+  void initState() {
+    super.initState();
+    _elementsNotifier = ValueNotifier(widget.initialPaths.map((e) => e.clone()).toList());
+    _previewElementNotifier = ValueNotifier(null);
+
+    _backgroundImage = Image.asset(widget.backgroundImagePath);
+    _resolveImageAspectRatio();
+  }
   
-  // ★★★ 追加点: ツールバーの高さ分のオフセットを定義 ★★★
-  static const double _toolbarOffsetY = 80.0;
+  @override
+  void dispose() {
+    _elementsNotifier.dispose();
+    _previewElementNotifier.dispose();
+    super.dispose();
+  }
 
+  void _resolveImageAspectRatio() {
+    final imageProvider = _backgroundImage.image;
+    final stream = imageProvider.resolve(const ImageConfiguration());
+    stream.addListener(ImageStreamListener((info, _) {
+      if (mounted) {
+        setState(() {
+          _imageAspectRatio = info.image.width / info.image.height;
+        });
+      }
+    }));
+  }
 
-  // 保存して前の画面に戻る処理
-  void _saveAndExit() async {
-    if (!mounted) return;
+  // ★★★【修正箇所】★★★
+  // 座標を背景画像の範囲内に収めるメソッド。dyのクランプ範囲の誤りを修正。
+  Offset _clampPosition(Offset position) {
+    if (_imageBounds == null) return position;
+    return Offset(
+      position.dx.clamp(_imageBounds!.left, _imageBounds!.right),
+      position.dy.clamp(_imageBounds!.top, _imageBounds!.bottom), // .right を .bottom に修正
+    );
+  }
 
-    final paths = _canvasKey.currentState?.paths ?? [];
-    final Uint8List? imageBytes = await _canvasKey.currentState?.getAsPng();
+  // --- Event Handlers ---
+
+  // ★★★【修正箇所】★★★
+  // _onPanStartからロジックを移動し、触れた瞬間に描画オブジェクトを作成する
+  // 座標を常に画像範囲内にクランプするように修正
+  void _onPanDown(DragDownDetails details) {
+    // 最初に元の座標で範囲内かチェック
+    if (_imageBounds == null || !_imageBounds!.contains(details.localPosition)) return;
+
+    // 描画に使う座標は範囲内に補正する
+    final pos = _clampPosition(details.localPosition);
+
+    final currentElements = List<DrawingElement>.from(_elementsNotifier.value);
+    switch (_selectedTool) {
+      case DrawingTool.pen:
+      case DrawingTool.eraser:
+        // 点を描画するために同じ座標を2つ持つパスを作成
+        currentElements.add(DrawingPath(id: DateTime.now().millisecondsSinceEpoch, points: [pos, pos], paint: _createPaintForTool()));
+        break;
+      case DrawingTool.line:
+        currentElements.add(StraightLine(id: DateTime.now().millisecondsSinceEpoch, start: pos, end: pos, paint: _createPaintForTool()));
+        break;
+      case DrawingTool.dimension:
+        currentElements.add(DimensionLine(id: DateTime.now().millisecondsSinceEpoch, start: pos, end: pos, paint: _createPaintForTool()));
+        break;
+      case DrawingTool.rectangle:
+        // 矩形はプレビューを使うため、以前のロジックを維持
+        _previewElementNotifier.value = Rectangle(
+          id: 0,
+          start: Offset(pos.dx - _rectangleWidth, pos.dy),
+          end: Offset(pos.dx, pos.dy + _rectangleHeight),
+          paint: Paint()
+            ..color = Colors.blue.withOpacity(0.5)
+            ..strokeWidth = 2.0
+            ..style = PaintingStyle.stroke,
+        );
+        return; // 他のツールと違い、ここでは要素リストを更新しない
+      case DrawingTool.text:
+        // テキストツールはタップで処理するため何もしない
+        return;
+    }
+    _elementsNotifier.value = currentElements;
+  }
+
+  // ★★★【修正箇所】★★★
+  // _onPanDownにロジックを移したため、このメソッドは空にする
+  void _onPanStart(DragStartDetails details) {
+    // 描画オブジェクトの作成は_onPanDownで行うため、ここでは処理不要
+  }
+
+  void _onPanUpdate(DragUpdateDetails details) {
+    final pos = _clampPosition(details.localPosition);
+
+    if (_selectedTool == DrawingTool.text) {
+      return;
+    }
+
+    if (_selectedTool == DrawingTool.rectangle) {
+      final currentPreview = _previewElementNotifier.value;
+      if (currentPreview is Rectangle) {
+        currentPreview.start = Offset(pos.dx - _rectangleWidth, pos.dy);
+        currentPreview.end = Offset(pos.dx, pos.dy + _rectangleHeight);
+        _previewElementNotifier.value = currentPreview.clone();
+      }
+      return;
+    }
     
-    if (mounted) {
-      Navigator.of(context).pop({
-        'paths': paths,
-        'imageBytes': imageBytes,
-      });
+    final currentElements = _elementsNotifier.value;
+    if (currentElements.isNotEmpty && currentElements.last is DrawingElementWithPoints) {
+      final currentElement = currentElements.last as DrawingElementWithPoints;
+      // _onPanDownで追加された要素の座標を更新する
+      if (currentElement.updatePosition(pos)) {
+        _elementsNotifier.value = List<DrawingElement>.from(currentElements);
+      }
     }
   }
 
+  void _onPanEnd(DragEndDetails details) {
+    if (_selectedTool == DrawingTool.rectangle) {
+      final currentPreview = _previewElementNotifier.value;
+      if (currentPreview is Rectangle) {
+        final finalRect = Rectangle(
+          id: DateTime.now().millisecondsSinceEpoch,
+          start: currentPreview.start,
+          end: currentPreview.end,
+          paint: _createPaintForTool(),
+        );
+        _elementsNotifier.value = [..._elementsNotifier.value, finalRect];
+        _previewElementNotifier.value = null;
+      }
+      return;
+    }
+  }
+
+  // ★★★【修正箇所】★★★
+  // タップした座標を画像範囲内にクランプするように修正
+  void _onTapCanvas(TapUpDetails details) {
+    // 最初に元の座標で範囲内かチェック
+    if (_imageBounds == null || !_imageBounds!.contains(details.localPosition)) return;
+    
+    // 描画に使う座標は範囲内に補正する
+    final tappedPoint = _clampPosition(details.localPosition);
+
+    if (_selectedTool == DrawingTool.rectangle) return;
+    
+    if (_selectedTool == DrawingTool.text) {
+      _addNewText(tappedPoint);
+    }
+  }
+
+  Paint _createPaintForTool() {
+    switch (_selectedTool) {
+      case DrawingTool.pen:
+        // ★★★【修正箇所】★★★
+        return Paint()
+          ..color = Colors.black
+          ..strokeWidth = 2.0
+          ..style = PaintingStyle.stroke
+          ..strokeCap = ui.StrokeCap.round; // 線の端を丸くして、点が描画されるようにする
+      case DrawingTool.eraser:
+        return Paint()
+          ..color = Colors.transparent
+          ..strokeWidth = 12.0
+          ..blendMode = BlendMode.clear
+          ..style = PaintingStyle.stroke
+          ..strokeCap = ui.StrokeCap.round; // 消しゴムも丸くしておくと使いやすい
+      case DrawingTool.line:
+        return Paint()..color = Colors.black..strokeWidth = 2.0;
+      case DrawingTool.rectangle:
+        return Paint()..color = Colors.black..strokeWidth = 2.0..style = PaintingStyle.stroke;
+      case DrawingTool.dimension:
+        return Paint()..color = Colors.black..strokeWidth = 1.5;
+      case DrawingTool.text:
+        return Paint()..color = Colors.black;
+    }
+  }
+
+  void _addNewText(Offset position) {
+    final textController = TextEditingController();
+    showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+              title: const Text('テキストを追加'),
+              content: TextField(controller: textController, autofocus: true, decoration: const InputDecoration(hintText: '注釈や数値を入力...')),
+              actions: [
+                TextButton(child: const Text('キャンセル'), onPressed: () => Navigator.of(context).pop()),
+                TextButton(child: const Text('OK'), onPressed: () => Navigator.of(context).pop(textController.text)),
+              ],
+            )).then((result) {
+      if (result != null && result.isNotEmpty) {
+        final newText = DrawingText(id: DateTime.now().millisecondsSinceEpoch, text: result, position: position, paint: _createPaintForTool());
+        _elementsNotifier.value = [..._elementsNotifier.value, newText];
+      }
+    });
+  }
+
+  void _saveDrawing() async {
+    await Future.delayed(const Duration(milliseconds: 50));
+    final boundary = _canvasKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+    if (boundary == null || _imageBounds == null) return;
+    const pixelRatio = 3.0;
+    final image = await boundary.toImage(pixelRatio: pixelRatio);
+    final srcRect = Rect.fromLTWH(
+      _imageBounds!.left * pixelRatio,
+      _imageBounds!.top * pixelRatio,
+      _imageBounds!.width * pixelRatio,
+      _imageBounds!.height * pixelRatio,
+    );
+    final dstRect = Rect.fromLTWH(0, 0, srcRect.width, srcRect.height);
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder, dstRect);
+    canvas.drawImageRect(image, srcRect, dstRect, Paint());
+    final picture = recorder.endRecording();
+    final croppedImage = await picture.toImage(dstRect.width.toInt(), dstRect.height.toInt());
+    final byteData = await croppedImage.toByteData(format: ui.ImageByteFormat.png);
+    final pngBytes = byteData?.buffer.asUint8List();
+
+    if (pngBytes != null && mounted) {
+      Navigator.of(context).pop({'paths': _elementsNotifier.value, 'imageBytes': pngBytes});
+    }
+  }
+
+  // --- UI Build ---
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -48,88 +265,107 @@ class _DrawingScreenState extends State<DrawingScreen> {
         title: Text(widget.title),
         actions: [
           IconButton(
-            icon: const Icon(Icons.undo),
-            onPressed: () {
-              _canvasKey.currentState?.undo();
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_forever),
-            onPressed: () {
-              _canvasKey.currentState?.clear();
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.check),
-            onPressed: _saveAndExit,
-          ),
+              icon: const Icon(Icons.undo),
+              onPressed: () {
+                if (_elementsNotifier.value.isNotEmpty) {
+                  final currentElements = List<DrawingElement>.from(_elementsNotifier.value);
+                  currentElements.removeLast();
+                  _elementsNotifier.value = currentElements;
+                }
+              }),
+          IconButton(icon: const Icon(Icons.save), onPressed: _saveDrawing),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(60.0),
+          child: Container(
+            color: Colors.grey[200],
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildToolButton(DrawingTool.pen, Icons.edit, '自由線'),
+                _buildToolButton(DrawingTool.line, Icons.show_chart, '直線'),
+                _buildToolButton(DrawingTool.rectangle, Icons.crop_square, '四角'),
+                _buildToolButton(DrawingTool.dimension, Icons.straighten, '寸法線'),
+                _buildToolButton(DrawingTool.text, Icons.text_fields, 'テキスト'),
+                _buildToolButton(DrawingTool.eraser, Icons.cleaning_services, '消しゴム'),
+              ],
+            ),
+          ),
+        ),
       ),
-      body: Stack(
-        children: [
-          // 1. 背景の描画エリア
-          Container(
-            margin: const EdgeInsets.all(8.0),
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey.shade400),
-            ),
-            child: DrawingCanvas(
-              key: _canvasKey,
-              initialPaths: widget.initialPaths,
-              backgroundImagePath: widget.backgroundImagePath,
-              currentMode: _drawingMode,
-              // ★★★ 変更点: 背景画像の上部に余白を設定 ★★★
-              contentPadding: const EdgeInsets.only(top: _toolbarOffsetY),
-            ),
+      body: Padding(
+        padding: const EdgeInsets.all(8.0),
+        child: LayoutBuilder(
+            builder: (context, constraints) {
+              final layoutAspectRatio = constraints.maxWidth / constraints.maxHeight;
+              double imageWidth;
+              double imageHeight;
+              if (layoutAspectRatio > _imageAspectRatio) {
+                imageHeight = constraints.maxHeight;
+                imageWidth = imageHeight * _imageAspectRatio;
+              } else {
+                imageWidth = constraints.maxWidth;
+                imageHeight = imageWidth / _imageAspectRatio;
+              }
+              final offsetX = (constraints.maxWidth - imageWidth) / 2;
+              final offsetY = 0.0;
+              _imageBounds = Rect.fromLTWH(offsetX, offsetY, imageWidth, imageHeight);
+
+              return RepaintBoundary(
+                key: _canvasKey,
+                child: Stack(
+                  alignment: Alignment.topLeft,
+                  children: [
+                    Positioned.fromRect(
+                      rect: _imageBounds!,
+                      child: _backgroundImage,
+                    ),
+                    DrawingCanvas(
+                      elementsNotifier: _elementsNotifier,
+                      previewElementNotifier: _previewElementNotifier,
+                      selectedTool: _selectedTool,
+                      onPanDown: _onPanDown,
+                      onPanStart: _onPanStart,
+      
+                      onPanUpdate: _onPanUpdate,
+                      onPanEnd: _onPanEnd,
+                      onTap: _onTapCanvas,
+                    ),
+                  ],
+                ),
+              );
+            },
           ),
-          // 2. 前面の操作ボタン
-          Align(
-            alignment: Alignment.topCenter,
-            child: Container(
-              margin: const EdgeInsets.only(top: 16.0),
-              padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 8.0),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.85),
-                borderRadius: BorderRadius.circular(20.0),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Colors.black26,
-                    blurRadius: 4,
-                    offset: Offset(0, 2),
-                  )
-                ]
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _buildModeButton(DrawingMode.free, Icons.edit, 'ペン'),
-                  _buildModeButton(DrawingMode.line, Icons.show_chart, '直線'),
-                  _buildModeButton(DrawingMode.rectangle, Icons.crop_square, '四角'),
-                  _buildModeButton(DrawingMode.eraser, Icons.cleaning_services, '消しゴム'),
-                ],
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
 
-  // 描画モード切り替えボタン
-  Widget _buildModeButton(DrawingMode mode, IconData icon, String label) {
-    final bool isSelected = _drawingMode == mode;
-    return IconButton(
-      onPressed: () => setState(() => _drawingMode = mode),
-      icon: Icon(icon),
-      tooltip: label,
-      color: isSelected 
-          ? Theme.of(context).colorScheme.primary 
-          : Theme.of(context).colorScheme.onSurfaceVariant,
-      style: IconButton.styleFrom(
-        backgroundColor: isSelected 
-            ? Theme.of(context).colorScheme.primary.withOpacity(0.12)
-            : null
+  Widget _buildToolButton(DrawingTool tool, IconData icon, String label) {
+    final isSelected = _selectedTool == tool;
+    return Expanded(
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            _selectedTool = tool;
+          });
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          color: isSelected ? Colors.blue.withOpacity(0.2) : Colors.transparent,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: isSelected ? Colors.blue : Colors.grey[700]),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                style: TextStyle(color: isSelected ? Colors.blue : Colors.grey[700], fontSize: 10),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
