@@ -5,16 +5,20 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:kouchuhyo_app/widgets/drawing_canvas.dart';
-import 'package:collection/collection.dart'; // 👈 **【修正点】パッケージをインポート**
+import 'package:collection/collection.dart';
 
 class DrawingScreen extends StatefulWidget {
-  final List<DrawingElement> initialPaths;
+  // ▼▼▼ ここのプロパティ名を変更 ▼▼▼
+  final List<DrawingElement> initialElements; // 👈【変更】initialPaths から変更
+  // ▲▲▲ ここまで ▲▲▲
   final String backgroundImagePath;
   final String title;
 
   const DrawingScreen({
     super.key,
-    required this.initialPaths,
+    // ▼▼▼ ここの引数名も変更 ▼▼▼
+    required this.initialElements, // 👈【変更】initialPaths から変更
+    // ▲▲▲ ここまで ▲▲▲
     required this.backgroundImagePath,
     required this.title,
   });
@@ -29,7 +33,8 @@ class _DrawingScreenState extends State<DrawingScreen> {
 
   DrawingTool _selectedTool = DrawingTool.pen;
   final GlobalKey _canvasKey = GlobalKey();
-
+  
+  // ...（Stateクラス内の他のプロパティは変更なし）...
   DrawingElement? _movingElement;
   Offset _panStartOffset = Offset.zero;
 
@@ -40,16 +45,20 @@ class _DrawingScreenState extends State<DrawingScreen> {
   late Image _backgroundImage;
   double _imageAspectRatio = 4 / 3;
 
+
   @override
   void initState() {
     super.initState();
-    _elementsNotifier = ValueNotifier(widget.initialPaths.map((e) => e.clone()).toList());
+    // ▼▼▼ ここの初期化処理を変更 ▼▼▼
+    _elementsNotifier = ValueNotifier(widget.initialElements.map((e) => e.clone()).toList()); // 👈【変更】initialPaths から変更
+    // ▲▲▲ ここまで ▲▲▲
     _previewElementNotifier = ValueNotifier(null);
 
     _backgroundImage = Image.asset(widget.backgroundImagePath);
     _resolveImageAspectRatio();
   }
 
+  // ...（disposeから_addNewTextまでは変更なし）...
   @override
   void dispose() {
     _elementsNotifier.dispose();
@@ -76,8 +85,6 @@ class _DrawingScreenState extends State<DrawingScreen> {
       position.dy.clamp(_imageBounds!.top, _imageBounds!.bottom),
     );
   }
-
-  // --- Event Handlers ---
 
   void _onPanDown(DragDownDetails details) {
     if (_imageBounds == null || !_imageBounds!.contains(details.localPosition)) return;
@@ -120,20 +127,22 @@ class _DrawingScreenState extends State<DrawingScreen> {
 
     final pos = _clampPosition(details.localPosition);
 
-    // 👇 **【修正点】lastWhereをlastWhereOrNullに変更し、検索条件を修正**
-    // `DrawingText`型で、かつタップ位置に含まれる要素を後ろから探す
     final hittableElement = _elementsNotifier.value
         .lastWhereOrNull((e) => e is DrawingText && e.contains(pos));
 
     if (hittableElement != null) {
-      // 見つかった要素（hittableElementはDrawingTextであることが確定）を移動対象として設定
       _movingElement = hittableElement;
-      // ドラッグ開始点と要素の元の位置との差分を計算して保持
       _panStartOffset = pos - (hittableElement as DrawingText).position;
     }
   }
 
   void _onPanUpdate(DragUpdateDetails details) {
+    // ★★★【修正】ここから追加 ★★★
+    // 背景画像の範囲外でのドラッグは無視する
+    if (_imageBounds == null || !_imageBounds!.contains(details.localPosition)) {
+      return;
+    }
+    // ★★★ ここまで追加 ★★★
     final pos = _clampPosition(details.localPosition);
 
     if (_movingElement != null && _movingElement is DrawingText) {
@@ -246,7 +255,9 @@ class _DrawingScreenState extends State<DrawingScreen> {
     });
   }
 
+
   void _saveDrawing() async {
+    // ...（この関数内の画像変換処理は変更なし）...
     await Future.delayed(const Duration(milliseconds: 50));
     final boundary = _canvasKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
     if (boundary == null || _imageBounds == null) return;
@@ -268,11 +279,13 @@ class _DrawingScreenState extends State<DrawingScreen> {
     final pngBytes = byteData?.buffer.asUint8List();
 
     if (pngBytes != null && mounted) {
-      Navigator.of(context).pop({'paths': _elementsNotifier.value, 'imageBytes': pngBytes});
+      // ▼▼▼ ここの戻り値のキーを変更 ▼▼▼
+      Navigator.of(context).pop({'elements': _elementsNotifier.value, 'imageBytes': pngBytes}); // 👈【変更】'paths' から 'elements' へ
+      // ▲▲▲ ここまで ▲▲▲
     }
   }
 
-  // --- UI Build ---
+  // ...（UIを構築するbuildメソッド以下は変更なし）...
   @override
   Widget build(BuildContext context) {
     return Scaffold(

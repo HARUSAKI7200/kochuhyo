@@ -17,6 +17,9 @@ dependencies:
   pdf: ^3.11.3
   printing: ^5.14.2
   cupertino_icons: ^1.0.8
+  path_provider: ^2.1.5
+  file_picker: ^10.2.0
+  collection: ^1.19.1
 
 dev_dependencies:
   flutter_test:

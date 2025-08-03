@@ -17,6 +17,8 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.blue,
         visualDensity: VisualDensity.adaptivePlatformDensity,
+        // ▼▼▼ この一行を追加します ▼▼▼
+        fontFamily: 'NotoSansJP', // 👈 ここでフォントファミリーを指定
       ),
       home: const HomeScreen(), // 最初に表示する画面をHomeScreenに変更
     );

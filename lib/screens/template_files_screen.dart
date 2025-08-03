@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:kouchuhyo_app/screens/order_form_screen.dart';
+import 'package:intl/intl.dart';
 
 class TemplateFilesScreen extends StatefulWidget {
   final String folderPath;
@@ -15,19 +16,31 @@ class TemplateFilesScreen extends StatefulWidget {
 }
 
 class _TemplateFilesScreenState extends State<TemplateFilesScreen> {
-  late Future<List<File>> _templateFilesFuture;
+  bool _isLoading = true;
+  List<File> _allFiles = [];
+  List<File> _filteredFiles = [];
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _templateFilesFuture = _getTemplateFiles();
+    _searchController.addListener(_filterFiles);
+    _loadTemplateFiles();
+  }
+
+  @override
+  void dispose() {
+    _searchController.removeListener(_filterFiles);
+    _searchController.dispose();
+    super.dispose();
   }
 
   String get _folderName {
     return widget.folderPath.split(Platform.pathSeparator).last;
   }
 
-  Future<List<File>> _getTemplateFiles() async {
+  Future<void> _loadTemplateFiles() async {
+    setState(() => _isLoading = true);
     final directory = Directory(widget.folderPath);
     final List<File> files = [];
     
@@ -40,7 +53,26 @@ class _TemplateFilesScreenState extends State<TemplateFilesScreen> {
       }
       files.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
     }
-    return files;
+    
+    setState(() {
+      _allFiles = files;
+      _filteredFiles = files;
+      _isLoading = false;
+    });
+  }
+
+  void _filterFiles() {
+    final query = _searchController.text.toLowerCase();
+    setState(() {
+      if (query.isEmpty) {
+        _filteredFiles = _allFiles;
+      } else {
+        _filteredFiles = _allFiles.where((file) {
+          final fileName = _getFileName(file).toLowerCase();
+          return fileName.contains(query);
+        }).toList();
+      }
+    });
   }
 
   Future<void> _loadTemplateAndNavigate(File file) async {
@@ -51,15 +83,22 @@ class _TemplateFilesScreenState extends State<TemplateFilesScreen> {
 
       if (!mounted) return;
 
+      // ▼▼▼ ここの Navigator.of(context).push を変更します ▼▼▼
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (context) => OrderFormScreen(templateData: kochuhyoData),
+          builder: (context) => OrderFormScreen(
+            templateData: kochuhyoData,
+            templatePath: file.path, // 👈【変更点】読み込んだファイルのパスを渡す
+          ),
         ),
       );
+      // ▲▲▲ ここまで ▲▲▲
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('テンプレートの読み込みに失敗しました: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('テンプレートの読み込みに失敗しました: $e')),
+        );
+      }
     }
   }
 
@@ -85,16 +124,18 @@ class _TemplateFilesScreenState extends State<TemplateFilesScreen> {
     if (confirmed == true) {
       try {
         await file.delete();
-        setState(() {
-          _templateFilesFuture = _getTemplateFiles();
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('テンプレートを削除しました。'), backgroundColor: Colors.green),
-        );
+        await _loadTemplateFiles();
+        if (mounted) {
+           ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('テンプレートを削除しました。'), backgroundColor: Colors.green),
+          );
+        }
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('削除に失敗しました: $e')),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('削除に失敗しました: $e')),
+          );
+        }
       }
     }
   }
@@ -103,43 +144,63 @@ class _TemplateFilesScreenState extends State<TemplateFilesScreen> {
     return file.path.split(Platform.pathSeparator).last.replaceAll('.json', '');
   }
 
+  String _formatDateTime(DateTime dt) {
+    return DateFormat('yyyy/MM/dd HH:mm').format(dt);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text('$_folderName のテンプレート'),
       ),
-      body: FutureBuilder<List<File>>(
-        future: _templateFilesFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError) {
-            return Center(child: Text('エラー: ${snapshot.error}'));
-          }
-          if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Text('この製品のテンプレートはありません。'));
-          }
-          
-          final files = snapshot.data!;
-          return ListView.builder(
-            itemCount: files.length,
-            itemBuilder: (context, index) {
-              final file = files[index];
-              return Card(
-                margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                child: ListTile(
-                  leading: const Icon(Icons.description),
-                  title: Text(_getFileName(file)),
-                  subtitle: Text('更新日時: ${file.lastModifiedSync()}'),
-                  onTap: () => _loadTemplateAndNavigate(file),
-                  onLongPress: () => _deleteTemplate(file),
-                ),
-              );
-            },
-          );
-        },
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                labelText: 'テンプレートを検索',
+                hintText: '保存名を入力...',
+                prefixIcon: const Icon(Icons.search),
+                border: const OutlineInputBorder(),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          _searchController.clear();
+                        },
+                      )
+                    : null,
+              ),
+            ),
+          ),
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _allFiles.isEmpty
+                    ? const Center(child: Text('この製品のテンプレートはありません。'))
+                    : _filteredFiles.isEmpty
+                        ? const Center(child: Text('該当するテンプレートが見つかりません。'))
+                        : ListView.builder(
+                            itemCount: _filteredFiles.length,
+                            itemBuilder: (context, index) {
+                              final file = _filteredFiles[index];
+                              return Card(
+                                margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                child: ListTile(
+                                  leading: const Icon(Icons.description),
+                                  title: Text(_getFileName(file)),
+                                  subtitle: Text('更新日時: ${_formatDateTime(file.lastModifiedSync())}'),
+                                  onTap: () => _loadTemplateAndNavigate(file),
+                                  onLongPress: () => _deleteTemplate(file),
+                                ),
+                              );
+                            },
+                          ),
+          ),
+        ],
       ),
     );
   }
